@@ -433,3 +433,16 @@ body::after {
 
 /* small marks render the single sigil.svg, tinted via currentColor (mask) */
 .sigil { display: inline-block; background: currentColor; -webkit-mask: url("assets/sigil.svg") center/contain no-repeat; mask: url("assets/sigil.svg") center/contain no-repeat; }
+
+/* contact lines — engagement section (added 2026-10-13) */
+.contact-lines a{
+  color:var(--seal);
+  text-decoration:none;
+  border-bottom:1px solid color-mix(in srgb, var(--seal) 35%, transparent);
+  padding-bottom:1px;
+  transition:color .18s ease, border-color .18s ease;
+}
+.contact-lines a:hover{
+  color:var(--seal-soft);
+  border-color:var(--seal-soft);
+}
