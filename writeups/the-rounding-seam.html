@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en" data-theme="">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Rounding Seam — cyberjake</title>
+<meta name="description" content="A credits-to-fiat conversion lets any authenticated user mint value because the debit path truncates at eight decimals while the credit path rounds half-up at two. A worked example of root-cause method.">
+<meta name="theme-color" content="#f7f3ea">
+<link rel="icon" href="../assets/sigil.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,380..560;1,9..144,380..520&family=Inter:wght@400;460;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+
+<header class="bar" id="bar">
+  <div class="wrap">
+    <a class="brand" href="../index.html" aria-label="cyberjake home">
+      <span class="sigil" aria-hidden="true"></span>
+      <span><b>cyberjake</b><span class="dot">.</span></span>
+    </a>
+    <nav class="links" id="nav">
+      <a href="../index.html#doctrines">Doctrines</a>
+      <a href="../index.html#arsenal">Arsenal</a>
+      <a href="../index.html#engage">Engagement</a>
+      <button class="theme-toggle" id="theme" aria-label="Toggle theme" title="Toggle light / dark">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2 12h2M20 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main class="movement doc">
+  <div class="wrap">
+    <a class="back" href="../index.html#writeups">←&nbsp; Writeups</a>
+
+    <div class="head">
+      <div class="kindline">
+        <span class="pill crit">Critical</span>
+        <span class="pill">Worked example</span>
+        <span class="pill">Doctrine 03 · 01</span>
+        <span class="pill">2026-08-12</span>
+      </div>
+      <h1>The Rounding Seam</h1>
+      <p class="rootline">A credits-to-fiat conversion allows any authenticated user to mint value — because the debit path truncates at eight decimals while the credit path rounds half-up at two.</p>
+    </div>
+
+    <div class="body">
+      <p class="first">This is a constructed example, not a disclosure. The system described does not exist; it is assembled from the shape that this class of bug takes across every credits ledger I have modelled. It is here because the method is the point, and the method is easier to follow on a target I am free to describe completely.</p>
+
+      <h2>Phase 00 — where the crowd is not</h2>
+      <p>The target is a marketplace with a two-year-old bounty program. The disclosed record is thick with reflected XSS, subdomain takeovers, and a handful of IDORs on the profile API — all patched, all from the first six months. That record says two things. The obvious one: those classes are swept. The useful one: every disclosed report is a single-request bug against a single endpoint. Nobody in that record has modelled the ledger.</p>
+      <p>The changelog says a promotional credits balance shipped eleven weeks ago — users earn credits on referrals and can convert them to account balance at checkout. Value that enters through one door and leaves through another, in code that is under three months old. That is the target.</p>
+
+      <h2>Phase 01 — the value model</h2>
+      <p>Credits enter on referral, on promo redemption, and on refund of a credit-paid order. They move exactly one way: conversion to account balance. They leave through checkout. So the exit path runs credits → balance → order, and the conversion step is the only place two denominations meet.</p>
+      <p>Two denominations, two precisions. The credits endpoint reports eight decimal places. The balance endpoint reports two, in minor units, as an integer. Anywhere a system converts between precisions it must decide what happens to the remainder, and that decision has a direction. The assumption the developers made, written down as a hypothesis: the conversion is lossless, or it loses in the house's favour.</p>
+
+      <h2>Phase 02 — attacking the assumption</h2>
+      <p>The probe is arithmetic, not payload. Convert an amount whose remainder sits exactly on the rounding boundary and read both sides. At a published rate of 100 credits to 1.00 in balance, converting 0.005 credits should yield 0.00005 in balance — far below the smallest representable minor unit.</p>
+      <figure class="code"><figcaption>probe — one conversion at the boundary</figcaption><pre><code>$ curl -s $API/credits --cookie a.jar | jq .balance
+"12.50000000"
+
+$ curl -s $API/credits/convert --cookie a.jar \
+    -H 'content-type: application/json' \
+    -d '{"amount":"0.005"}'
+{"status":"ok","converted":"0.005","credited":1}
+
+$ curl -s $API/credits --cookie a.jar | jq .balance
+"12.50000000"</code></pre></figure>
+      <p>The credit side registered one minor unit. The debit side did not move at all. The server floors the credits debit to eight decimals — 0.005 credits is below its own precision after the internal rate multiplication, so it truncates to zero — while the balance credit rounds half-up to two decimals, and 0.00005 rounds to 0.0001, which the integer minor-unit column stores as 1. Value was created. The invariant is broken by one unit per call, and the call has no cost.</p>
+      <p>This is <strong>Doctrine 03</strong> in its simplest form: a floor on the debit and a ceil on the credit. It reaches Critical rather than Low because the operation is unbounded and self-funding — nothing consumes credits, so the loop has no natural stop.</p>
+
+      <h2>Phase 03 — verify the final state</h2>
+      <p>The response said <strong>credited: 1</strong>, and the response is not evidence. Twenty 200s can apply once, and a credited field can be computed for display and never committed. Ground truth for a balance claim is the balance endpoint plus the ledger, read from a session that shares no cache with the one that made the request.</p>
+      <figure class="code"><figcaption>ground truth — fresh session, ledger sum vs displayed balance</figcaption><pre><code># 200 iterations, smallest scale that proves the invariant breaks
+$ for i in $(seq 200); do
+    curl -s $API/credits/convert --cookie a.jar \
+      -H 'content-type: application/json' \
+      -d '{"amount":"0.005"}' > /dev/null
+  done
+
+# fresh login, no cookie reuse, no cache
+$ curl -s $API/login -d @creds.json -c fresh.jar > /dev/null
+
+$ curl -s $API/credits --cookie fresh.jar | jq .balance
+"12.50000000"          # credits: unchanged, as at the start
+
+$ curl -s $API/account/balance --cookie fresh.jar | jq .minor_units
+200                    # balance: +2.00, from nothing
+
+$ curl -s $API/account/ledger --cookie fresh.jar \
+    | jq '[.entries[].delta] | add'
+0                      # ledger sums to zero. balance says 200.</code></pre></figure>
+      <p>That last line is the finding. The ledger — the system's own record of every movement — sums to zero, while the balance it is supposed to describe reads 200 minor units. The two disagree, which means the balance is not derived from the ledger at all. The report writes itself from there: the invariant, the numbers, the two hundred calls that produced them, and nothing drained.</p>
+
+      <h2>Why this is not a scanner finding</h2>
+      <p>No payload was sent. No parameter was fuzzed. Every request in this writeup is well-formed, authenticated, and individually indistinguishable from normal use — a scanner would report a clean surface, and it would be right about everything it is capable of checking. The bug is not in a request. It is in the disagreement between two rounding decisions made in different files by different people, and the only way to reach it is to have written the value model down first.</p>
+
+      <p class="endnote">Enumeration is a race against automation that never sleeps. Arithmetic correctness is a race against nobody.</p>
+    </div>
+  </div>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div class="colophon">
+      <strong style="color:var(--ink-soft)">cyberjake</strong> — offensive security research.<br>
+      Model first. Hunt where they aren't.
+    </div>
+    <span class="sigil" aria-hidden="true"></span>
+  </div>
+</footer>
+
+<script src="../app.js"></script>
+</body>
+</html>
