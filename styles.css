@@ -446,3 +446,9 @@ body::after {
   color:var(--seal-soft);
   border-color:var(--seal-soft);
 }
+
+/* ---- track record (engagement) ---- */
+.record { display: flex; align-items: center; gap: 1.3rem; margin-bottom: 3rem; }
+.record .rec-num { font-family: var(--serif); font-weight: 460; font-size: clamp(3.2rem, 2.2rem + 4.2vw, 4.6rem); line-height: .82; color: var(--gold); font-variant-numeric: lining-nums; }
+.record .rec-label { font-family: var(--mono); font-size: .82rem; letter-spacing: .02em; color: var(--ink-soft); line-height: 1.5; }
+.record .rec-sub { display: block; color: var(--ink-faint); }
